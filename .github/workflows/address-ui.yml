@@ -20,17 +20,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10'
-      - name: Integrate address search
-        shell: python
-        run: |
-          from pathlib import Path
-          p = Path('app/src/main/java/ru/zhkh/app/MainActivity.kt')
-          s = p.read_text()
-          marker = '        0 -> {'
-          assert marker in s, 'Home screen marker not found'
-          if 'AddressSearch(this@MainActivity)' not in s:
-              s = s.replace(marker, marker + '\n         AddressSearch(this@MainActivity) { address = it }', 1)
-          p.write_text(s)
       - name: Compile APK
         id: compile
         shell: bash
@@ -52,7 +41,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const log = fs.existsSync('build.log') ? fs.readFileSync('build.log', 'utf8').slice(-14000) : 'Compilation did not start. Check the run setup steps.';
+            const log = fs.existsSync('build.log') ? fs.readFileSync('build.log', 'utf-8').slice(-14000) : 'Compilation did not start.';
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             await github.rest.issues.create({
               ...context.repo,
