@@ -45,7 +45,7 @@ fun ApartmentApp() {
         }
     }
 
-    val tabs = listOf("Квартира", "Данные", "Платежи", "Документы")
+    val tabs = listOf("Поиск", "Квартира", "Платежи", "Документы")
 
     Scaffold(
         bottomBar = {
@@ -69,13 +69,13 @@ fun ApartmentApp() {
                 0 -> AddressSearch(context) { selected ->
                     address = selected
                     tab = 1
-                    message = "Адрес сохранён. Открыта вкладка «Данные»."
+                    message = "Адрес сохранён. Открыта карточка квартиры."
                 }
 
                 1 -> {
-                    Text("Данные по адресу", style = MaterialTheme.typography.headlineSmall)
+                    Text("Квартира", style = MaterialTheme.typography.headlineSmall)
                     if (address.isBlank()) {
-                        Text("Сначала выберите адрес на вкладке «Квартира».")
+                        Text("Сначала найдите и сохраните полный адрес.")
                     } else {
                         Card(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -85,17 +85,12 @@ fun ApartmentApp() {
                         }
                         Card(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("Источники", style = MaterialTheme.typography.titleMedium)
+                                Text("Доступные данные", style = MaterialTheme.typography.titleMedium)
                                 Text("Геоданные: подключены")
+                                Text("Платежи: ${payments.size} записей")
+                                Text("Документы: импорт будет добавлен следующим")
                                 Text("Госуслуги: нужен вход и регистрация приложения")
                                 Text("ГИС ЖКХ: нужен доступ оператора")
-                                Text("Квитанции: загрузка документов будет следующей")
-                            }
-                        }
-                        Card(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("Платежи", style = MaterialTheme.typography.titleMedium)
-                                Text("Сохранено записей: ${payments.size}")
                             }
                         }
                     }
@@ -140,7 +135,7 @@ fun ApartmentApp() {
 
                 else -> {
                     Text("Документы", style = MaterialTheme.typography.headlineSmall)
-                    Text("Здесь будут квитанции, выписки и документы по адресу.")
+                    Text("Здесь появятся загруженные квитанции, выписки и договоры.")
                     Text("Автоматическая загрузка из Госуслуг и ГИС ЖКХ требует отдельной регистрации интеграции.")
                 }
             }
