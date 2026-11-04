@@ -56,23 +56,25 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
             return@LaunchedEffect
         }
 
+        val cached = houseCache[houseQuery]
+        if (cached != null) {
+            results = cached.map { house ->
+                AddressSuggestion(house, flatInQuery, if (flatInQuery.isBlank()) house else "$house, кв. $flatInQuery")
+            }
+            status = if (cached.isEmpty()) "Ничего не найдено." else "Выберите дом."
+            return@LaunchedEffect
+        }
+
         busy = true
         status = "Ищем дом…"
         try {
-            val houses = houseCache.getOrPut(houseQuery) {
-                withContext(Dispatchers.IO) {
-                    if (dadataKey.isNotBlank()) dadataHouses(houseQuery, dadataKey)
-                    else nominatimHouses(houseQuery)
-                }
+            val houses = withContext(Dispatchers.IO) {
+                if (dadataKey.isNotBlank()) dadataHouses(houseQuery, dadataKey)
+                else nominatimHouses(houseQuery)
             }
-
+            houseCache[houseQuery] = houses
             results = houses.map { house ->
-                val flat = flatInQuery
-                AddressSuggestion(
-                    houseAddress = house,
-                    flat = flat,
-                    fullAddress = if (flat.isNotBlank()) "$house, кв. $flat" else house
-                )
+                AddressSuggestion(house, flatInQuery, if (flatInQuery.isBlank()) house else "$house, кв. $flatInQuery")
             }
             status = when {
                 houses.isEmpty() -> "Дом не найден. Уточните улицу или город."
@@ -220,7 +222,7 @@ private fun nominatimHouses(query: String): List<String> {
             URLEncoder.encode(query, "UTF-8")
     val request = Request.Builder()
         .url(url)
-        .header("User-Agent", "ZhkhPlus/4.1 (Android)")
+        .header("User-Agent", "ZhkhPlus/4.2 (Android)")
         .header("Accept-Language", "ru")
         .build()
 
