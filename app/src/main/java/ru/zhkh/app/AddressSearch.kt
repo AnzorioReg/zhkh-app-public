@@ -16,9 +16,12 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 data class AddressSuggestion(val title: String, val subtitle: String)
+
+private val addressCache = ConcurrentHashMap<String, List<AddressSuggestion>>()
 
 @Composable
 fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
@@ -33,21 +36,30 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(query) {
-        val text = normalizeAddressQuery(query)
-        if (text.length < 4) {
+        val original = query.trim()
+        val text = normalizeAddressQuery(original)
+        if (text.length < 6) {
             results = emptyList()
             status = ""
             return@LaunchedEffect
         }
+
+        addressCache[text]?.let {
+            results = it
+            status = if (it.isEmpty()) "Ничего не найдено." else "Выберите адрес."
+            return@LaunchedEffect
+        }
+
         busy = true
         status = "Ищем…"
         try {
             val loaded = withContext(Dispatchers.IO) { searchAddresses(text) }
+            addressCache[text] = loaded
             results = loaded
-            status = if (loaded.isEmpty()) "Ничего не найдено. Попробуйте написать улицу и номер дома." else "Выберите адрес."
+            status = if (loaded.isEmpty()) "Ничего не найдено. Попробуйте добавить номер дома." else "Выберите адрес."
         } catch (e: Exception) {
             results = emptyList()
-            status = "Ошибка поиска: ${e.message ?: "нет соединения"}"
+            status = "Ошибка поиска: ${e.message ?: "нет соединения"}. Попробуйте через минуту."
         } finally {
             busy = false
         }
@@ -120,7 +132,6 @@ fun normalizeAddressQuery(input: String): String {
     text = text.replace(Regex("(?i)\\bк\\s*(\\d+)\\b"), "корпус $1")
     text = text.replace(Regex("(?i)\\bкорп\\s*(\\d+)\\b"), "корпус $1")
     text = text.replace(Regex("(?i)\\bкв\\s*\\.?\\s*(\\d+)\\b"), "квартира $1")
-    text = text.replace(Regex("(?i)\\bквартира\\s*\\.?\\s*(\\d+)\\b"), "квартира $1")
     return text
 }
 
@@ -131,20 +142,35 @@ fun extractFlatNumber(input: String): String {
 
 private fun searchAddresses(query: String): List<AddressSuggestion> {
     val client = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
-        .callTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(12, TimeUnit.SECONDS)
         .build()
 
-    val normalized = query
     return try {
-        photonSearch(client, normalized)
+        nominatimSearch(client, query)
     } catch (first: Exception) {
         try {
-            nominatimSearch(client, normalized)
+            photonSearch(client, query)
         } catch (second: Exception) {
-            throw IllegalStateException("Проверьте интернет. ${second.message ?: ""}".trim())
+            throw IllegalStateException("Адресные сервисы временно ограничили запросы. ${second.message ?: ""}".trim())
         }
+    }
+}
+
+private fun nominatimSearch(client: OkHttpClient, query: String): List<AddressSuggestion> {
+    val url = "https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=10&q=" +
+            URLEncoder.encode(query, "UTF-8")
+    val response = client.newCall(request(url)).execute()
+    response.use {
+        val body = it.body?.string().orEmpty()
+        if (it.code == 429) throw IllegalStateException("Сервис ограничил частоту запросов")
+        if (!it.isSuccessful) throw IllegalStateException("Адресный сервис ответил кодом ${it.code}")
+        val array = JSONArray(body)
+        return (0 until array.length()).map { i ->
+            AddressSuggestion(array.getJSONObject(i).optString("display_name"), "")
+        }.filter { it.title.contains(Regex("\\d")) }
+            .distinctBy { it.title }
     }
 }
 
@@ -153,6 +179,7 @@ private fun photonSearch(client: OkHttpClient, query: String): List<AddressSugge
     val response = client.newCall(request(url)).execute()
     response.use {
         val body = it.body?.string().orEmpty()
+        if (it.code == 429) throw IllegalStateException("Сервис ограничил частоту запросов")
         if (!it.isSuccessful) throw IllegalStateException("Адресный сервис ответил кодом ${it.code}")
         val features = JSONObject(body).optJSONArray("features") ?: JSONArray()
         return (0 until features.length()).mapNotNull { i ->
@@ -167,21 +194,6 @@ private fun photonSearch(client: OkHttpClient, query: String): List<AddressSugge
                 .joinToString(" ")
                 .ifBlank { properties.optString("label") }
             if (title.isBlank()) null else AddressSuggestion(title, properties.optString("label"))
-        }.filter { suggestion -> suggestion.title.contains(Regex("\\d")) }
-            .distinctBy { it.title }
-    }
-}
-
-private fun nominatimSearch(client: OkHttpClient, query: String): List<AddressSuggestion> {
-    val url = "https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=10&q=" +
-            URLEncoder.encode(query, "UTF-8")
-    val response = client.newCall(request(url)).execute()
-    response.use {
-        val body = it.body?.string().orEmpty()
-        if (!it.isSuccessful) throw IllegalStateException("Адресный сервис ответил кодом ${it.code}")
-        val array = JSONArray(body)
-        return (0 until array.length()).map { i ->
-            AddressSuggestion(array.getJSONObject(i).optString("display_name"), "")
         }.filter { it.title.contains(Regex("\\d")) }
             .distinctBy { it.title }
     }
@@ -190,7 +202,7 @@ private fun nominatimSearch(client: OkHttpClient, query: String): List<AddressSu
 private fun request(url: String): Request =
     Request.Builder()
         .url(url)
-        .header("User-Agent", "ZhkhPlus/3.3 (Android)")
+        .header("User-Agent", "ZhkhPlus/3.4 (Android; https://github.com/AnzorioReg/zhkh-app-public)")
         .header("Accept", "application/json")
         .header("Accept-Language", "ru")
         .build()
