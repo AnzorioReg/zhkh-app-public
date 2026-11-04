@@ -34,64 +34,108 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
         val text = query.trim()
         if (text.length < 4) {
             results = emptyList()
+            status = ""
             return@LaunchedEffect
         }
         busy = true
+        status = "Ищем адреса…"
         try {
-            results = withContext(Dispatchers.IO) {
-                val url = "https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=ru&addressdetails=1&limit=8&q=" +
+            val loaded = withContext(Dispatchers.IO) {
+                val url = "https://nominatim.openstreetmap.org/search" +
+                        "?format=jsonv2&countrycodes=ru&addressdetails=1&limit=8&q=" +
                         URLEncoder.encode(text, "UTF-8")
+                val client = OkHttpClient.Builder()
+                    .callTimeout(20, TimeUnit.SECONDS)
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(20, TimeUnit.SECONDS)
+                    .build()
                 val request = Request.Builder()
                     .url(url)
-                    .header("User-Agent", "ZhkhPlus/3.0")
+                    .header("User-Agent", "ZhkhPlus/3.1 (Android)")
                     .header("Accept-Language", "ru")
+                    .header("Accept", "application/json")
                     .build()
-                OkHttpClient.Builder().callTimeout(15, TimeUnit.SECONDS).build()
-                    .newCall(request).execute().use { response ->
-                        val array = JSONArray(response.body?.string() ?: "[]")
-                        (0 until array.length()).map { array.getJSONObject(it) }
-                            .distinctBy { it.optString("osm_type") + it.optString("osm_id") }
+                client.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        throw IllegalStateException("Сервер адресов ответил кодом ${response.code}")
                     }
+                    val array = JSONArray(body)
+                    (0 until array.length()).map { array.getJSONObject(it) }
+                        .distinctBy { it.optString("osm_type") + it.optString("osm_id") }
+                }
             }
+            results = loaded
+            status = if (loaded.isEmpty()) "Ничего не найдено. Уточните город, улицу или дом." else "Выберите адрес из списка."
         } catch (e: Exception) {
-            status = "Ошибка поиска: ${e.message}"
+            results = emptyList()
+            status = "Не удалось найти адрес: ${e.message ?: "нет соединения"}. Проверьте интернет и попробуйте ещё раз."
         } finally {
             busy = false
         }
     }
 
-    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         Text("Найдите квартиру", style = MaterialTheme.typography.headlineSmall)
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
             label = { Text("Начните вводить адрес") },
-            supportingText = { Text("Например: улица, дом, город") },
+            supportingText = { Text("Например: Тверская 1 Москва") },
+            singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
 
-        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (busy) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(
+            modifier = Modifier.weight(1f, fill = false),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             items(results) { item ->
                 val address = item.optString("display_name")
                 Card(Modifier.fillMaxWidth()) {
-                    TextButton(onClick = {
-                        selectedHouse = address
-                        prefs.edit().putString("selected_house", address).apply()
-                        results = emptyList()
-                    }) { Text(address) }
+                    TextButton(
+                        onClick = {
+                            selectedHouse = address
+                            prefs.edit().putString("selected_house", address).apply()
+                            results = emptyList()
+                            status = "Адрес выбран. Укажите квартиру."
+                        }
+                    ) {
+                        Text(address)
+                    }
                 }
             }
         }
 
         if (selectedHouse.isNotBlank()) {
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     Text("Квартира", style = MaterialTheme.typography.titleMedium)
                     Text(selectedHouse)
-                    OutlinedTextField(flat, { flat = it }, label = { Text("Квартира") }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(account, { account = it }, label = { Text("Лицевой счёт") }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(
+                        value = flat,
+                        onValueChange = { flat = it },
+                        label = { Text("Квартира") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = account,
+                        onValueChange = { account = it },
+                        label = { Text("Лицевой счёт") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Button(
                         enabled = flat.isNotBlank(),
                         onClick = {
@@ -100,17 +144,24 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
                                 .putString("address", full)
                                 .putString("apartment_number", flat.trim())
                                 .putString("apartment_account", account.trim())
-                                .putString("apartments_list", (prefs.getString("apartments_list", "") ?: "") + full + "\n")
+                                .putString(
+                                    "apartments_list",
+                                    (prefs.getString("apartments_list", "") ?: "") + full + "\n"
+                                )
                                 .apply()
                             onSelected(full)
                             status = "Квартира добавлена в список."
                         },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("Сохранить квартиру") }
+                    ) {
+                        Text("Сохранить квартиру")
+                    }
                 }
             }
         }
 
-        if (status.isNotBlank()) Text(status)
+        if (status.isNotBlank()) {
+            Text(status)
+        }
     }
 }
