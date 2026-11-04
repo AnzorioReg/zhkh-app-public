@@ -1,0 +1,38 @@
+name: Integrate address search and build APK
+on:
+  push:
+    paths:
+      - 'app/src/main/java/ru/zhkh/app/AddressSearch.kt'
+      - '.github/workflows/address-ui.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10'
+      - name: Integrate address module
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('app/src/main/java/ru/zhkh/app/MainActivity.kt')
+          s = p.read_text()
+          marker = '        0 -> {'
+          assert marker in s, 'Home screen marker not found'
+          s = s.replace(marker, marker + '\n         AddressSearch(this@MainActivity) { address = it }', 1)
+          p.write_text(s)
+      - name: Build APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zhkh-address-search-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
