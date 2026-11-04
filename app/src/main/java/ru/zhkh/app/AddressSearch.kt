@@ -33,24 +33,21 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(query) {
-        val text = query.trim()
+        val text = normalizeAddressQuery(query)
         if (text.length < 4) {
             results = emptyList()
             status = ""
             return@LaunchedEffect
         }
         busy = true
-        status = "Ищем адреса…"
+        status = "Ищем…"
         try {
             val loaded = withContext(Dispatchers.IO) { searchAddresses(text) }
             results = loaded
-            status = when {
-                loaded.isEmpty() -> "Ничего не найдено. Попробуйте добавить город: например, «Новочеркасский проспект 33 Санкт-Петербург»."
-                else -> "Выберите адрес из списка."
-            }
+            status = if (loaded.isEmpty()) "Ничего не найдено. Попробуйте написать улицу и номер дома." else "Выберите адрес."
         } catch (e: Exception) {
             results = emptyList()
-            status = "Не удалось найти адрес: ${e.message ?: "нет соединения"}."
+            status = "Ошибка поиска: ${e.message ?: "нет соединения"}"
         } finally {
             busy = false
         }
@@ -61,8 +58,8 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            label = { Text("Начните вводить адрес") },
-            supportingText = { Text("Улица, дом и город работают лучше всего") },
+            label = { Text("Новочеркасский проспект 33 к2") },
+            supportingText = { Text("Можно писать: «к2», «кв. 45», «квартира 45»") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -80,9 +77,7 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
                     }) {
                         Column {
                             Text(item.title)
-                            if (item.subtitle.isNotBlank()) {
-                                Text(item.subtitle, style = MaterialTheme.typography.bodySmall)
-                            }
+                            if (item.subtitle.isNotBlank()) Text(item.subtitle, style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
@@ -94,15 +89,16 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Квартира", style = MaterialTheme.typography.titleMedium)
                     Text(selectedHouse)
-                    OutlinedTextField(flat, { flat = it }, label = { Text("Квартира") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(flat, { flat = it }, label = { Text("Квартира: 45 или кв. 45") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(account, { account = it }, label = { Text("Лицевой счёт") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     Button(
                         enabled = flat.isNotBlank(),
                         onClick = {
-                            val full = "$selectedHouse, кв. ${flat.trim()}"
+                            val flatNumber = extractFlatNumber(flat)
+                            val full = "$selectedHouse, кв. $flatNumber"
                             prefs.edit()
                                 .putString("address", full)
-                                .putString("apartment_number", flat.trim())
+                                .putString("apartment_number", flatNumber)
                                 .putString("apartment_account", account.trim())
                                 .putString("apartments_list", (prefs.getString("apartments_list", "") ?: "") + full + "\n")
                                 .apply()
@@ -119,18 +115,33 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
     }
 }
 
+fun normalizeAddressQuery(input: String): String {
+    var text = input.trim().replace(Regex("\\s+"), " ")
+    text = text.replace(Regex("(?i)\\bк\\s*(\\d+)\\b"), "корпус $1")
+    text = text.replace(Regex("(?i)\\bкорп\\s*(\\d+)\\b"), "корпус $1")
+    text = text.replace(Regex("(?i)\\bкв\\s*\\.?\\s*(\\d+)\\b"), "квартира $1")
+    text = text.replace(Regex("(?i)\\bквартира\\s*\\.?\\s*(\\d+)\\b"), "квартира $1")
+    return text
+}
+
+fun extractFlatNumber(input: String): String {
+    val match = Regex("(?i)(?:кв|квартира)\\s*\\.?\\s*(\\d+)").find(input)
+    return match?.groupValues?.get(1) ?: input.filter { it.isDigit() }.ifBlank { input.trim() }
+}
+
 private fun searchAddresses(query: String): List<AddressSuggestion> {
     val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .callTimeout(25, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
         .build()
 
+    val normalized = query
     return try {
-        photonSearch(client, query)
+        photonSearch(client, normalized)
     } catch (first: Exception) {
         try {
-            nominatimSearch(client, query)
+            nominatimSearch(client, normalized)
         } catch (second: Exception) {
             throw IllegalStateException("Проверьте интернет. ${second.message ?: ""}".trim())
         }
@@ -147,17 +158,17 @@ private fun photonSearch(client: OkHttpClient, query: String): List<AddressSugge
         return (0 until features.length()).mapNotNull { i ->
             val feature = features.getJSONObject(i)
             val properties = feature.optJSONObject("properties") ?: return@mapNotNull null
-            val street = listOfNotNull(
-                properties.optString("name").ifBlank { null },
-                properties.optString("housenumber").ifBlank { null }
-            ).joinToString(" ")
+            val street = properties.optString("name")
+            val house = properties.optString("housenumber")
             val city = properties.optString("city").ifBlank {
                 properties.optString("town").ifBlank { properties.optString("county") }
             }
-            val title = listOfNotNull(street.ifBlank { null }, city.ifBlank { null }).joinToString(", ")
+            val title = listOfNotNull(street.ifBlank { null }, house.ifBlank { null }, city.ifBlank { null })
+                .joinToString(" ")
                 .ifBlank { properties.optString("label") }
             if (title.isBlank()) null else AddressSuggestion(title, properties.optString("label"))
-        }.distinctBy { it.title }
+        }.filter { suggestion -> suggestion.title.contains(Regex("\\d")) }
+            .distinctBy { it.title }
     }
 }
 
@@ -170,16 +181,16 @@ private fun nominatimSearch(client: OkHttpClient, query: String): List<AddressSu
         if (!it.isSuccessful) throw IllegalStateException("Адресный сервис ответил кодом ${it.code}")
         val array = JSONArray(body)
         return (0 until array.length()).map { i ->
-            val item = array.getJSONObject(i)
-            AddressSuggestion(item.optString("display_name"), "")
-        }.distinctBy { it.title }
+            AddressSuggestion(array.getJSONObject(i).optString("display_name"), "")
+        }.filter { it.title.contains(Regex("\\d")) }
+            .distinctBy { it.title }
     }
 }
 
 private fun request(url: String): Request =
     Request.Builder()
         .url(url)
-        .header("User-Agent", "ZhkhPlus/3.2 (Android; contact: user)")
+        .header("User-Agent", "ZhkhPlus/3.3 (Android)")
         .header("Accept", "application/json")
         .header("Accept-Language", "ru")
         .build()
