@@ -11,6 +11,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -27,19 +28,19 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var selectedHouse by remember { mutableStateOf("") }
     var flatInput by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(query) {
         val normalized = normalizeQuery(query)
         val flat = extractFlatNumber(normalized)
         val houseQuery = removeFlatFromQuery(normalized)
 
-        if (houseQuery.length < 6) {
+        if (houseQuery.length < 8) {
             results = emptyList()
             status = ""
             return@LaunchedEffect
         }
 
+        delay(700)
         busy = true
         status = "Ищем дом…"
         try {
@@ -48,7 +49,7 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
                         URLEncoder.encode(houseQuery, "UTF-8")
                 val request = Request.Builder()
                     .url(url)
-                    .header("User-Agent", "ZhkhPlus/4.3 (Android)")
+                    .header("User-Agent", "ZhkhPlus/4.4 (Android)")
                     .header("Accept-Language", "ru")
                     .build()
                 OkHttpClient.Builder()
@@ -67,7 +68,7 @@ fun AddressSearch(context: Context, onSelected: (String) -> Unit) {
             status = if (results.isEmpty()) "Ничего не найдено." else "Выберите дом."
         } catch (e: Exception) {
             results = emptyList()
-            status = "Ошибка поиска: ${e.message ?: "нет соединения"}"
+            status = "Ошибка поиска: ${e.message ?: "нет соединения"}. Подождите минуту и попробуйте снова."
         } finally {
             busy = false
         }
